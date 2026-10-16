@@ -6,6 +6,7 @@ Hold **Fn**, speak, let go. It answers out loud, shows the reply in a small floa
 ## What it can do
 
 - **Talk:** answers in English, Hindi or Hinglish. It speaks a one-line summary and shows the full answer in a panel at the top of the screen (bullets, bold, code, copy button). Menu → Voice changes how much it speaks.
+- **Any AI provider:** Claude by default, or switch to OpenAI, Groq, OpenRouter, or a local model via Ollama/LM Studio. The Model menu lists what your key can access.
 - **Accurate transcription:** Groq Whisper (free API key) for the final transcript, tuned for Hinglish and your team's names; Apple's recognizer gives the live preview and is the fallback.
 - **Dictate anywhere:** hold **Right Option**, speak, release, and the words are typed where your cursor is, in any app, with punctuation fixed and fillers removed.
 - **Floating pill:** a small pill that appears while it's listening, thinking or speaking, then fades away. Click it to talk hands-free, right-click for the menu, drag it anywhere. Menu → Floating Pill lets you keep it always on (as a tiny dot), hide it for an hour, or turn it off.
@@ -24,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/Tarun-kumar-29/open-assistant/main/
 
 It downloads the latest release, puts **Open Assistant.app** in Applications and launches it. Then:
 
-1. **Paste your Anthropic API key** when asked (console.anthropic.com → API Keys). Stored in your Keychain.
+1. **Paste an API key** when asked: Anthropic by default (console.anthropic.com → API Keys). Or menu → **Provider** to use OpenAI, Groq, OpenRouter or a local model instead. Keys live in your Keychain.
 2. **Allow the permissions** macOS asks for: Microphone, Speech Recognition, Accessibility and Input Monitoring (System Settings → Privacy & Security if a prompt is missed).
 3. Menu bar icon → **Set Groq API Key…** with a free key from console.groq.com. This gives you accurate Hinglish transcription; without it Apple's recognizer is used.
 4. Hold **Right ⌘** and say "hello".
@@ -68,12 +69,14 @@ Open it from the menu bar icon → **Open Config File**. After editing, click **
 
 | Key | Default | Notes |
 |---|---|---|
-| `model` | `claude-sonnet-5-5` | `claude-haiku-5-5` is faster; `claude-opus-5-5` is smarter but slower |
+| `provider` | `anthropic` | `anthropic`, `openai`, `groq`, `openrouter`, or `custom` (any OpenAI-compatible URL, e.g. Ollama). Menu → **Provider** |
+| `model` | `claude-sonnet-5-5` | Menu → **Model** lists the provider's live models; or type any ID |
+| `customBaseURL` | `""` | For the custom provider, e.g. `http://localhost:11434/v1` |
 | `maxTokens` | `2048` | Maximum reply length |
 | `hotkey` | `fn` | `fn`, `rightOption`, `rightCommand`, `rightControl`, `keycode:<n>` for any key (that key is then reserved for the assistant), or `none` |
 | `dictationHotkey` | `rightOption` | Key to hold for dictation; same options, or `none` |
 | `dictationCleanup` | `true` | Fix punctuation and remove fillers before inserting (uses `dictationModel`) |
-| `dictationModel` | `claude-haiku-5-5` | Fast model used only for dictation cleanup |
+| `dictationModel` | `""` | Model for dictation cleanup; empty picks a fast one for the provider |
 | `dictationInsert` | `paste` | How text is inserted: `paste` (⌘V, works in WhatsApp, Slack, browsers, everything), `accessibility` (direct insert in native fields, no clipboard), or `type` (keystrokes; slowest) |
 | `pillMode` | `activeOnly` | `activeOnly` (appears only while listening/thinking/speaking), `always` (small dot when idle), or `never` |
 | `pillPosition` | `bottomCenter` | `bottomCenter`, `bottomLeft`, `bottomRight`, `topCenter`, `topLeft`, `topRight`, or drag the pill anywhere |

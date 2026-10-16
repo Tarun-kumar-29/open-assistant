@@ -5,7 +5,11 @@ import AppKit
 /// Settings live in ~/Library/Application Support/OpenAssistant/config.json.
 /// Any key missing from the file falls back to the default below.
 struct AppConfig: Codable {
+    /// anthropic | openai | groq | openrouter | custom
+    var provider: String = "anthropic"
     var model: String = "claude-sonnet-5-5"
+    /// Base URL for the custom provider, e.g. http://localhost:11434/v1 for Ollama.
+    var customBaseURL: String = ""
     var maxTokens: Int = 2048
     /// fn | rightOption | rightCommand | rightControl | keycode:<number> | none
     var hotkey: String = "fn"
@@ -13,7 +17,8 @@ struct AppConfig: Codable {
     var dictationHotkey: String = "rightOption"
     /// Tidy dictated text (punctuation, fillers) with a fast model before inserting it.
     var dictationCleanup: Bool = true
-    var dictationModel: String = "claude-haiku-5-5"
+    /// Empty = pick a fast model for the current provider automatically.
+    var dictationModel: String = ""
     /// paste | accessibility | type — how dictated text is put into the focused app.
     var dictationInsert: String = "paste"
     /// always | activeOnly | never — when the floating pill is visible.

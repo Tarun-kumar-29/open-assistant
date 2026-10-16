@@ -9,6 +9,9 @@ final class Assistant {
     private let speechIn: SpeechInput
     private let speechOut = SpeechOutput()
     private let client = ClaudeClient()
+    private let openAI = OpenAIClient()
+
+    var provider: Provider { Provider.named(config.provider) }
     private let tools = ToolRunner()
     private let connectors: ConnectorManager
     private let apiKeyProvider: () -> String?
@@ -77,6 +80,7 @@ final class Assistant {
     }
 
     func apply(_ config: AppConfig) {
+        if config.provider != self.config.provider || config.model != self.config.model { messages = [] }
         self.config = config
         pill.configure(
             mode: PillMode(rawValue: config.pillMode) ?? .activeOnly,
@@ -213,7 +217,7 @@ final class Assistant {
             return
         }
         var output = text
-        if config.dictationCleanup, let key = apiKeyProvider(), !key.isEmpty {
+        if config.dictationCleanup, let key = provider.key(), !key.isEmpty {
             do {
                 output = try await cleanUpDictation(text, apiKey: key)
             } catch {
@@ -230,15 +234,13 @@ final class Assistant {
         You clean up dictated speech so it can be typed into a document or chat as-is.
         Rules: add punctuation and capitalisation; remove fillers (um, uh, "you know", repeated words);         keep every meaningful word, the speaker's language and script exactly (Hinglish stays Hinglish in Latin script,         Hindi stays Hindi); never answer, translate, summarise or add anything;         if the speaker says "new line" or "new paragraph", insert a line break. Output only the cleaned text.
         """
-        let body: [String: Any] = [
-            "model": config.dictationModel,
-            "max_tokens": 1024,
-            "system": system,
-            "messages": [["role": "user", "content": [["type": "text", "text": text]]]],
-        ]
+        let fast = config.dictationModel.isEmpty
+            ? (provider.fastModel.isEmpty ? config.model : provider.fastModel)
+            : config.dictationModel
+        let userMsg: [[String: Any]] = [["role": "user", "content": [["type": "text", "text": text]]]]
         var out = ""
-        let result = try await client.stream(body: body, apiKey: apiKey, betas: [],
-                                             onText: { out += $0 }, onBlockStart: { _ in })
+        let result = try await streamChat(model: fast, system: system, messages: userMsg, tools: [], maxTokens: 1024,
+                                          apiKey: apiKey, onText: { out += $0 }, onBlockStart: { _ in })
         if out.isEmpty, let first = result.content.first, let t = first["text"] as? String { out = t }
         let cleaned = out.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? text : cleaned
@@ -261,8 +263,8 @@ final class Assistant {
     // MARK: - Conversation
 
     func ask(_ text: String) {
-        guard let key = apiKeyProvider(), !key.isEmpty else {
-            showError("No Anthropic API key yet. Click the menu bar icon → Set Anthropic API Key…")
+        guard let key = provider.key(), !key.isEmpty else {
+            showError("No \(provider.name) API key yet. Menu bar icon → Provider → Set API Key…")
             return
         }
         interrupt()
@@ -311,10 +313,13 @@ final class Assistant {
         do {
             for _ in 0..<12 {
                 try checkCurrent(id)
-                let result = try await client.stream(
-                    body: requestBody(),
+                let result = try await streamChat(
+                    model: config.model,
+                    system: systemPrompt(),
+                    messages: messages,
+                    tools: currentTools(),
+                    maxTokens: config.maxTokens,
                     apiKey: apiKey,
-                    betas: [],
                     onText: { [weak self] t in
                         guard let self, self.turnID == id, !Task.isCancelled else { return }
                         let m = self.panel.model
@@ -490,7 +495,7 @@ final class Assistant {
 
     private func currentTools() -> [[String: Any]] {
         var toolList = ToolRunner.definitions + connectors.toolDefinitions
-        if config.webSearch {
+        if config.webSearch && provider.isAnthropic {
             toolList.append(["type": "web_search_20250305", "name": "web_search", "max_uses": 3])
         }
         return toolList
@@ -510,14 +515,29 @@ final class Assistant {
         return false
     }
 
-    private func requestBody() -> [String: Any] {
-        [
-            "model": config.model,
-            "max_tokens": config.maxTokens,
-            "system": systemPrompt(),
-            "messages": messages,
-            "tools": currentTools(),
-        ]
+    /// One streaming call through whichever provider is configured.
+    private func streamChat(model: String, system: String, messages: [[String: Any]], tools: [[String: Any]],
+                            maxTokens: Int, apiKey: String,
+                            onText: (String) -> Void, onBlockStart: ([String: Any]) -> Void) async throws -> ClaudeClient.Result {
+        let p = provider
+        if p.isAnthropic {
+            var body: [String: Any] = [
+                "model": model,
+                "max_tokens": maxTokens,
+                "system": system,
+                "messages": messages,
+            ]
+            if !tools.isEmpty { body["tools"] = tools }
+            return try await client.stream(body: body, apiKey: apiKey, betas: [], onText: onText, onBlockStart: onBlockStart)
+        }
+        guard let base = p.resolvedBaseURL(custom: config.customBaseURL) else {
+            throw SimpleError("Set the base URL for the custom provider in the config (customBaseURL).")
+        }
+        guard !model.isEmpty else { throw SimpleError("Pick a model from the menu bar icon → Model.") }
+        return try await openAI.stream(baseURL: base, apiKey: apiKey, model: model, system: system,
+                                       messages: messages, tools: tools, maxTokens: maxTokens,
+                                       useMaxCompletionTokens: p.usesMaxCompletionTokens,
+                                       onText: onText, onBlockStart: onBlockStart)
     }
 
     private func systemPrompt() -> String {

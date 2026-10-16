@@ -18,7 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         connectors = ConnectorManager()
         connectorsWindow = ConnectorsWindowController()
         assistant = Assistant(config: config, panel: panel, connectors: connectors,
-                              apiKeyProvider: { Keychain.apiKey() })
+                              apiKeyProvider: { Provider.named(AppConfig.load().provider).key() })
         setupMainMenu()
         setupStatusItem()
         assistant.pill.menuProvider = { [weak self] in self?.buildMenu() ?? NSMenu() }
@@ -38,7 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         startHotkey()
-        if Keychain.apiKey() == nil { setAPIKey() }
+        ModelCatalog.shared.onChange = { [weak self] in self?.rebuildMenu() }
+        if Provider.named(config.provider).key() == nil {
+            setProviderKey()
+        } else {
+            refreshModels()
+        }
     }
 
     // MARK: - Hotkey
@@ -183,7 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(pillMenuItem())
         add(menu, "Connectors…", #selector(openConnectors), "k")
-        add(menu, "Set Anthropic API Key…", #selector(setAPIKey), "")
+        menu.addItem(providerMenuItem())
+        menu.addItem(modelMenuItem())
         add(menu, Transcriber.groqKey() == nil ? "Set Groq API Key (better transcription)…" : "Set Groq API Key…",
             #selector(setGroqKey), "")
         menu.addItem(voiceMenuItem())
@@ -355,6 +361,164 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             assistant.apply(config)
             rebuildMenu()
         }
+    }
+
+    // MARK: - Provider & model
+
+    private func providerMenuItem() -> NSMenuItem {
+        let current = Provider.named(config.provider)
+        let item = NSMenuItem(title: "Provider: \(current.name)", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        for p in Provider.all {
+            let mi = NSMenuItem(title: p.name + (p.key() == nil ? "   (no key yet)" : ""),
+                                action: #selector(providerChosen(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = p.id
+            mi.state = config.provider == p.id ? .on : .off
+            sub.addItem(mi)
+        }
+        sub.addItem(.separator())
+        let keyItem = NSMenuItem(title: current.key() == nil ? "Set \(current.name) API Key…" : "Change \(current.name) API Key…",
+                                 action: #selector(setProviderKey), keyEquivalent: "")
+        keyItem.target = self
+        sub.addItem(keyItem)
+        if current.id == "custom" {
+            let urlItem = NSMenuItem(title: config.customBaseURL.isEmpty ? "Set Base URL…" : "Base URL: \(config.customBaseURL)",
+                                     action: #selector(setCustomBaseURL), keyEquivalent: "")
+            urlItem.target = self
+            sub.addItem(urlItem)
+        }
+        item.submenu = sub
+        return item
+    }
+
+    private func modelMenuItem() -> NSMenuItem {
+        let p = Provider.named(config.provider)
+        let catalog = ModelCatalog.shared
+        let item = NSMenuItem(title: "Model: \(config.model.isEmpty ? "none" : config.model)", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        let ids = catalog.list(for: p)
+        if catalog.loading.contains(p.id) {
+            let li = NSMenuItem(title: "Loading models…", action: nil, keyEquivalent: "")
+            li.isEnabled = false
+            sub.addItem(li)
+        } else if let err = catalog.errors[p.id] {
+            let li = NSMenuItem(title: "⚠️ \(err)", action: nil, keyEquivalent: "")
+            li.isEnabled = false
+            sub.addItem(li)
+        } else if ids.isEmpty {
+            let li = NSMenuItem(title: p.key() == nil ? "Add the API key first" : "No models listed yet", action: nil, keyEquivalent: "")
+            li.isEnabled = false
+            sub.addItem(li)
+        }
+        var matched = false
+        for id in ids {
+            let mi = NSMenuItem(title: id, action: #selector(modelChosen(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = id
+            if config.model == id { mi.state = .on; matched = true }
+            sub.addItem(mi)
+        }
+        sub.addItem(.separator())
+        let custom = NSMenuItem(title: matched || config.model.isEmpty ? "Type a model ID…" : "Custom: \(config.model)",
+                                action: #selector(customModel), keyEquivalent: "")
+        custom.target = self
+        custom.state = matched || config.model.isEmpty ? .off : .on
+        sub.addItem(custom)
+        let refresh = NSMenuItem(title: "Refresh List", action: #selector(refreshModels), keyEquivalent: "")
+        refresh.target = self
+        sub.addItem(refresh)
+        item.submenu = sub
+        return item
+    }
+
+    @objc private func providerChosen(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, id != config.provider else { return }
+        let p = Provider.named(id)
+        config.provider = id
+        config.model = p.defaultModel
+        config.save()
+        assistant.apply(config)
+        rebuildMenu()
+        if p.key() == nil {
+            setProviderKey()
+        } else {
+            refreshModels()
+        }
+    }
+
+    @objc private func setProviderKey() {
+        let p = Provider.named(config.provider)
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "\(p.name) API Key"
+        a.informativeText = p.consoleURL.isEmpty
+            ? "Stored in your Keychain."
+            : "Get one at \(p.consoleURL). Stored in your Keychain."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = p.keyHint
+        a.accessoryView = field
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        Keychain.write(p.keyAccount, key)
+        assistant.apply(config)
+        rebuildMenu()
+        refreshModels()
+    }
+
+    @objc private func setCustomBaseURL() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "OpenAI-compatible Base URL"
+        a.informativeText = "e.g. http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio), or any provider's /v1 URL."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = config.customBaseURL
+        a.accessoryView = field
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        config.customBaseURL = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        config.save()
+        assistant.apply(config)
+        rebuildMenu()
+        refreshModels()
+    }
+
+    @objc private func refreshModels() {
+        ModelCatalog.shared.refresh(Provider.named(config.provider), customBaseURL: config.customBaseURL)
+    }
+
+    @objc private func modelChosen(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        config.model = id
+        config.save()
+        assistant.apply(config)
+        rebuildMenu()
+    }
+
+    @objc private func customModel() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "Model ID"
+        a.informativeText = "Exact model ID as the provider names it."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = config.model
+        a.accessoryView = field
+        a.addButton(withTitle: "Use")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let id = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        config.model = id
+        config.save()
+        assistant.apply(config)
+        rebuildMenu()
     }
 
     private func voiceMenuItem() -> NSMenuItem {
