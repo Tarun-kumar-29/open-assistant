@@ -11,12 +11,14 @@ curl -fsSL "$URL" -o "$TMP/app.zip"
 echo "Installing to /Applications..."
 ditto -x -k "$TMP/app.zip" "$TMP"
 pkill -x OpenAssistant 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x OpenAssistant >/dev/null || break; sleep 0.3; done
 rm -rf "/Applications/Open Assistant.app"
 mv "$TMP/Open Assistant.app" /Applications/
 # The app isn't notarized by Apple, so clear the quarantine flag Gatekeeper would otherwise block on.
 xattr -dr com.apple.quarantine "/Applications/Open Assistant.app" 2>/dev/null || true
 rm -rf "$TMP"
-open -a "/Applications/Open Assistant.app"
+sleep 1
+open -a "/Applications/Open Assistant.app" 2>/dev/null || { sleep 2; open -a "/Applications/Open Assistant.app"; }
 cat <<'MSG'
 
 Open Assistant is running (waveform icon in the menu bar).
